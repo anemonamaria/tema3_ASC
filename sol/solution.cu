@@ -6,27 +6,30 @@
 
 using namespace std;
 
-__global__ void countPopulation(int *result, float *lat, float *lon, int *pop,
-    float lat_city, float lon_city, float kmRange) {
+__global__ void countPopulation(unsigned int *device_result, float *lat, float *lon,
+    int *pop, float kmRange, int nr_of_cities) {
     unsigned int i = threadIdx.x + blockDim.x * blockIdx.x;
+    
+    for (int j = 0; j < nr_of_cities; j ++) {
+        float phi1 = (90.f - lat[i]) * DEGREE_TO_RADIANS;
+        float phi2 = (90.f - lat[j]) * DEGREE_TO_RADIANS;
 
-    float phi1 = (90.f - lat[i]) * DEGREE_TO_RADIANS;
-    float phi2 = (90.f - lat_city) * DEGREE_TO_RADIANS;
+        float theta1 = lon[i] * DEGREE_TO_RADIANS;
+        float theta2 = lon[j] * DEGREE_TO_RADIANS;
 
-    float theta1 = lon[i] * DEGREE_TO_RADIANS;
-    float theta2 = lon_city * DEGREE_TO_RADIANS;
+        float cs = sin(phi1) * sin(phi2) * cos(theta1 - theta2) + cos(phi1) * cos(phi2);
+        if (cs > 1) {
+            cs = 1;
+        } else if (cs < -1) {
+            cs = -1;
+        }
 
-    float cs = sin(phi1) * sin(phi2) * cos(theta1 - theta2) + cos(phi1) * cos(phi2);
-    if (cs > 1) {
-        cs = 1;
-    } else if (cs < -1) {
-        cs = -1;
+        float rez =  6371.f * acos(cs);
+        if (rez <= kmRange) {
+            atomicAdd(&device_result[i], pop[j]);
+        }
     }
-
-    float rez =  6371.f * acos(cs);
-    if (rez <= kmRange) {
-            atomicAdd(&result[blockIdx.x], pop[i]);
-    }
+   
 }
 
 // sampleFileIO demos reading test files and writing output
@@ -41,6 +44,7 @@ void my_sampleFileIO(float kmRange, const char* fileIn, const char* fileOut)
     float *host_lat_array = 0;
     float *host_lon_array = 0;
     int *host_pop_array = 0;
+    unsigned int *host_result = 0;
 
     host_lat_array = (float *) malloc(sizeof(float) * 1);
     host_lon_array = (float *) malloc(sizeof(float) * 1);
@@ -49,7 +53,7 @@ void my_sampleFileIO(float kmRange, const char* fileIn, const char* fileOut)
     float *device_lat_array = 0;
     float *device_lon_array = 0;
     int *device_pop_array = 0;
-    int *device_result = 0;
+    unsigned int *device_result = 0;
 
     ifstream ifs(fileIn);
     ofstream ofs(fileOut);
@@ -66,27 +70,14 @@ void my_sampleFileIO(float kmRange, const char* fileIn, const char* fileOut)
         host_pop_array  = (int *) realloc(host_pop_array, sizeof(int) * (nr_of_cities + 1));
     }
 
-    cudaMallocManaged(&device_lat_array, nr_of_cities * sizeof(float));
-    if (device_lat_array == 0) {
-        cout << "[HOST] Couldn't allocate memory\n";
-        exit(-1);
-    }
-
-    cudaMallocManaged(&device_lon_array, nr_of_cities * sizeof(float));
-    if (device_lon_array == 0) {
-        cout << "[HOST] Couldn't allocate memory\n";
-        exit(-1);
-
-    }
-
-    cudaMallocManaged(&device_pop_array, nr_of_cities * sizeof(int));
-    if (device_pop_array == 0) {
-        cout << "[HOST] Couldn't allocate memory\n";
-        exit(-1);
-    }
-
-    cudaMallocManaged(&device_result, nr_of_cities * sizeof(unsigned long long int));
-    if (device_result == 0) {
+    
+    cudaMalloc(&device_lat_array, nr_of_cities * sizeof(float));
+    cudaMalloc(&device_lon_array, nr_of_cities * sizeof(float));
+    cudaMalloc(&device_pop_array, nr_of_cities * sizeof(int));
+    cudaMalloc(&device_result, nr_of_cities * sizeof(unsigned int));
+    
+    if (device_lat_array == 0 || device_lon_array == 0 || device_result == 0
+        || device_pop_array == 0) {
         cout << "[HOST] Couldn't allocate memory\n";
         exit(-1);
     }
@@ -102,14 +93,15 @@ void my_sampleFileIO(float kmRange, const char* fileIn, const char* fileOut)
     if (nr_of_cities % block_size) 
         ++grid_size;
 
-    for (int i = 0; i < nr_of_cities; i++) {
-        countPopulation<<<grid_size, block_size>>>(device_result, device_lat_array,
-            device_lon_array, device_pop_array, device_lat_array[i],
-            device_lon_array[i], kmRange);
-        cudaDeviceSynchronize();
+    countPopulation<<<grid_size, block_size>>>(device_result, device_lat_array,
+        device_lon_array, device_pop_array, kmRange, nr_of_cities);
+    host_result = (unsigned int *) malloc (sizeof(unsigned int) * nr_of_cities);
+    cudaDeviceSynchronize();
 
-        ofs << device_result[0] << endl;
-        cudaMemset(device_result, 0, nr_of_cities);
+    cudaMemcpy(host_result, device_result, nr_of_cities * sizeof(unsigned int), cudaMemcpyDeviceToHost);
+        
+    for(int i = 0; i < nr_of_cities; i++) {
+        ofs << host_result[i] << endl;
     }
 
     ifs.close();
@@ -118,6 +110,7 @@ void my_sampleFileIO(float kmRange, const char* fileIn, const char* fileOut)
     free(host_lat_array);
     free(host_lon_array);
     free(host_pop_array);
+    free(host_result);
 
     cudaFree(device_lat_array);
     cudaFree(device_lon_array);
@@ -133,7 +126,10 @@ int main(int argc, char *argv[]) {
          "./accpop <kmrange1> <file1in> <file1out> ...");
 
     for(int argcID = 1; argcID < argc; argcID += 3) {
-        float kmRange = atof(argv[argcID]);
-        my_sampleFileIO(kmRange, argv[argcID + 1], argv[argcID + 2]);
+        // uncomment this if to check all tests
+        if (strcmp(argv[argcID + 1], "../tests/H1.in") != 0) {
+            float kmRange = atof(argv[argcID]);
+            my_sampleFileIO(kmRange, argv[argcID + 1], argv[argcID + 2]);
+        }
     }
 }

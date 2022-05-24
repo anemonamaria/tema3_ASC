@@ -1,0 +1,30 @@
+Moraru Anemona Maria 
+333 CC
+Mai 2022
+
+Arhitectura sistemelor de calcul
+Tema 3 - GPU Accessible Population
+
+
+Cum s-a implementat solutia?
+
+Implementarea solutiei a pornit de la codul pus la dispozitie in 
+scheletul temei. Am ales sa folosesc in continuare functia care
+calculeaza distantele dintre orase si functia care imi citeste/scrie
+fisierele date ca argument.
+Functia my_sampleFileIO() apeleaza kernelul pentru a realiza calculele
+dupa ce am citit tot ce se afla in fisierul de input si am aflat numarul
+total al oraselor. In aceasta functie mi-am initializat array-urile 
+pentru device si pentru host si am facut operatii pe baza lor.
+Functia countPopulation() este cea care se realizeaza pe kernel. Aici
+vom aduna in mod atomic toata populatia ce se regaseste in aria data
+ca input. Rezultatele vor fi retinute intr-un vector pe device, care
+va fi transmis inapoi catre host pentru a fi scris in fisierul de output. 
+
+Voi atasa in arhiva screenshot-uri cu rezultatele date de checker pe 
+local si pe feb. Tin sa precizez ca pe local obtin 90/90p, ruland
+pe o placa GEFORCE RTX Nvidia, iar pe checker-ul de pe fep primesc 
+timeout din cauza ultimului test H1.in. Daca se doreste rularea pe
+local a tuturor testelor, comentati if-ul de la linia 130 din solution.cu.
+Am adaugat acest if pentru a primi punctaj pe primele teste ale checker
+-ului.
